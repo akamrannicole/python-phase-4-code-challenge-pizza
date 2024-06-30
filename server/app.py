@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 from models import db, Restaurant, RestaurantPizza, Pizza
 from flask_migrate import Migrate
-from flask import Flask, request, jsonify, make_response
+from flask import Flask, request, make_response
 from flask_restful import Api, Resource
 import os
 
-BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-DATABASE = os.environ.get("DB_URI", f"sqlite:///{os.path.join(BASE_DIR, 'app.db')}")
-
 app = Flask(__name__)
-app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-app.json.compact = False
+
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+DATABASE = os.environ.get(
+    "DB_URI", f"sqlite:///{os.path.join(BASE_DIR, 'app.db')}")
+
+app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE
 
 migrate = Migrate(app, db)
+
 db.init_app(app)
 api = Api(app)
 
@@ -23,66 +25,67 @@ def index():
     return "<h1>Code challenge</h1>"
 
 
-# Route to get all restaurants
-@app.route("/restaurants", methods=["GET"])
-def get_restaurants():
-    restaurants = Restaurant.query.all()
-    return jsonify([restaurant.to_dict() for restaurant in restaurants])
+class RestaurantClass(Resource):
+    def get(self):
+        restaurant_list = [
+            restaurant.to_dict(rules=("-restaurant_pizzas",))
+            for restaurant in Restaurant.query.all()
+        ]
+        return make_response(restaurant_list, 200)
 
 
-# Route to get a single restaurant by ID
-@app.route("/restaurants/<int:id>", methods=["GET"])
-def get_restaurant(id):
-    restaurant = Restaurant.query.get(id)
-    if restaurant is None:
-        return make_response(jsonify({"error": "Restaurant not found"}), 404)
-    return jsonify(restaurant.to_dict())
+api.add_resource(RestaurantClass, "/restaurants")
 
 
-# Route to delete a restaurant by ID
-@app.route("/restaurants/<int:id>", methods=["DELETE"])
-def delete_restaurant(id):
-    restaurant = Restaurant.query.get(id)
-    if restaurant is None:
-        return make_response(jsonify({"error": "Restaurant not found"}), 404)
-    db.session.delete(restaurant)
-    db.session.commit()
-    return make_response('', 204)
+class RestaurantById(Resource):
+    def get(self, id):
+        restaurant = Restaurant.query.filter_by(id=id).one_or_none()
+        if restaurant:
+            return make_response(restaurant.to_dict(), 200)
+        else:
+            return make_response({"error": "Restaurant not found"}, 404)
+
+    def delete(self, id):
+        restaurant = Restaurant.query.filter_by(id=id).one_or_none()
+        if restaurant:
+            db.session.delete(restaurant)
+            db.session.commit()
+            return make_response({}, 204)
+        else:
+            return make_response({"error": "Restaurant not found"}, 404)
 
 
-# Route to get all pizzas
-@app.route("/pizzas", methods=["GET"])
-def get_pizzas():
-    pizzas = Pizza.query.all()
-    return jsonify([pizza.to_dict() for pizza in pizzas])
+api.add_resource(RestaurantById, "/restaurants/<int:id>")
 
 
-# Route to create a RestaurantPizza
-@app.route("/restaurant_pizzas", methods=["POST"])
-def create_restaurant_pizza():
-    data = request.get_json()
+class PizzaClass(Resource):
+    def get(self):
+        pizzas = [pizza.to_dict(only=("id", "ingredients", "name"))
+                  for pizza in Pizza.query.all()]
+        return make_response(pizzas, 200)
 
-    restaurant_id = data.get('restaurant_id')
-    pizza_id = data.get('pizza_id')
-    price = data.get('price')
 
-    if not restaurant_id or not pizza_id or not price:
-        return make_response(jsonify({"error": "Missing data"}), 400)
+api.add_resource(PizzaClass, "/pizzas")
 
-    if not (1 <= price <= 30):
-        return make_response(jsonify({"error": "Price must be between 1 and 30"}), 400)
 
-    new_restaurant_pizza = RestaurantPizza(
-        restaurant_id=restaurant_id,
-        pizza_id=pizza_id,
-        price=price
-    )
+class RestaurantPizzasClass(Resource):
+    def post(self):
+        try:
+            data = request.get_json()
+            new_res_pizza = RestaurantPizza(
+                price=data["price"],
+                pizza_id=data["pizza_id"],
+                restaurant_id=data["restaurant_id"]
+            )
+            db.session.add(new_res_pizza)
+            db.session.commit()
 
-    db.session.add(new_restaurant_pizza)
-    db.session.commit()
+            return make_response(new_res_pizza.to_dict(), 201)
+        except (KeyError, ValueError):
+            return make_response({"errors": ["validation errors"]}, 400)
 
-    return jsonify(new_restaurant_pizza.to_dict()), 201
 
+api.add_resource(RestaurantPizzasClass, "/restaurant_pizzas")
 
 if __name__ == "__main__":
     app.run(port=5555, debug=True)
